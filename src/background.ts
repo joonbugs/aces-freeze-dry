@@ -1,25 +1,17 @@
-// background.ts
-interface Tab {
-  url: string;
-  title: string;
-  timestamp: number;
-}
+import { Tab, Todo } from "./types";
 
-interface Todo {
-  id: number;
-  text: string;
-  completed: boolean;
-  active?: boolean;
-  tabs?: Tab[];
-}
+// Store window id with a todo
+// Switching active windows also switches the active todo
+// Need to store which tabs were active (those should be the ones that are reopened)
+// Also need to store which tab was focused (the tab that is actually being displayed)
 
 // Keep track of active todo in memory
 let activeTodoId: number | null = null;
 
 // Initialize by getting active todo from storage
-chrome.storage.local.get(['todos'], (result) => {
+chrome.storage.local.get(["todos"], (result) => {
   const todos: Todo[] = result.todos || [];
-  const activeTodo = todos.find(todo => todo.active);
+  const activeTodo = todos.find((todo) => todo.active);
   if (activeTodo) {
     activeTodoId = activeTodo.id;
     console.log(`Active id: ${activeTodo.id}`);
@@ -28,7 +20,7 @@ chrome.storage.local.get(['todos'], (result) => {
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'SET_ACTIVE_TODO') {
+  if (message.type === "SET_ACTIVE_TODO") {
     activeTodoId = message.todoId;
   }
   sendResponse({ success: true });
@@ -36,16 +28,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Listen for new tabs
 chrome.tabs.onCreated.addListener(async (tab) => {
-  console.log(`tab: ${tab}, ${tab.url}, ${tab.title}, ${activeTodoId}`)
-  if (!activeTodoId || !tab.url || !tab.title) return;
+  console.log(`tab: ${tab}, ${tab.url}, ${tab.title}, ${activeTodoId}`);
+  if (!activeTodoId || !tab.url || !tab.title || !tab.id) return;
 
   // Get current todos
-  const { todos = [] } = await chrome.storage.local.get(['todos']);
-  
+  const { todos = [] } = await chrome.storage.local.get(["todos"]);
+
   const newTab: Tab = {
-    url: tab.url,
+    id: tab.id,
+    currentUrl: tab.url,
+    history: [],
     title: tab.title,
-    timestamp: Date.now()
+    timestamp: Date.now(),
   };
 
   // Update the active todo with the new tab
@@ -63,29 +57,51 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 // Optional: Listen for tab updates to get the final URL
 // (since onCreated might fire before the URL is set)
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  console.log(`tab: ${tab}, ${tab.url}, ${tab.title}, ${activeTodoId}`)
-  if (!activeTodoId || !changeInfo.url || tab.url?.includes("chrome://newtab/")) return;
+  if (!activeTodoId || !changeInfo.url || tab.url?.includes("chrome://newtab/"))
+    return;
 
-  const { todos = [] } = await chrome.storage.local.get(['todos']);
+  const { todos = [] } = await chrome.storage.local.get(["todos"]);
   const activeTodo = todos.find((todo: Todo) => todo.id === activeTodoId);
-  
+
   if (!activeTodo?.tabs) return;
 
-  // Check if we already have this tab URL
-  const tabExists = activeTodo.tabs.some((t: Tab) => t.url === changeInfo.url || t.title === changeInfo.title);
-  if (tabExists) return;
+  // Check if we already have this tab
+  const existingTab = activeTodo.tabs.find((t: Tab) => t.id === tabId);
 
-  const newTab: Tab = {
-    url: changeInfo.url,
-    title: tab.title || changeInfo.url,
-    timestamp: Date.now()
-  };
+  const updatedTodos = todos.map((todo: Todo) => {
+    if (todo.id === activeTodoId) {
+      let updatedTabs;
 
-  const updatedTodos = todos.map((todo: Todo) =>
-    todo.id === activeTodoId
-      ? { ...todo, tabs: [...(todo.tabs || []), newTab] }
-      : todo
-  );
+      if (existingTab) {
+        // Update existing tab
+        updatedTabs = todo.tabs?.map((t) => {
+          if (t.id === tabId) {
+            return {
+              ...t,
+              history: [t.currentUrl, ...t.history].slice(0, 50), // Limit history to 50 entries
+              currentUrl: changeInfo.url,
+              title: tab.title || changeInfo.url,
+              timestamp: Date.now(),
+            };
+          }
+          return t;
+        });
+      } else {
+        // Create new tab
+        const newTab: Tab = {
+          id: tabId,
+          currentUrl: changeInfo.url!,
+          history: [],
+          title: tab.title || changeInfo.url!,
+          timestamp: Date.now(),
+        };
+        updatedTabs = [newTab, ...(todo.tabs || [])];
+      }
+
+      return { ...todo, tabs: updatedTabs };
+    }
+    return todo;
+  });
 
   await chrome.storage.local.set({ todos: updatedTodos });
 });
