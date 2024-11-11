@@ -22,7 +22,11 @@ export const TodoItem: React.FC<TodoItemProps> = ({
   return (
     <li key={todo.id}>
       <div 
-        onClick={() => toggleActive(todo.id)}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleActive(todo.id)}
+        }
         style={{ 
           display: "flex", 
           alignItems: "center", 

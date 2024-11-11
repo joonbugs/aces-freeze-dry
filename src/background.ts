@@ -1,10 +1,5 @@
 import { Tab, Todo } from "./types";
 
-// Store window id with a todo
-// Switching active windows also switches the active todo
-// Need to store which tabs were active (those should be the ones that are reopened)
-// Also need to store which tab was focused (the tab that is actually being displayed)
-
 // Keep track of active todo in memory
 let activeTodoId: number | null = null;
 
@@ -34,6 +29,20 @@ chrome.tabs.onCreated.addListener(async (tab) => {
   // Get current todos
   const { todos = [] } = await chrome.storage.local.get(["todos"]);
 
+  const activeTodo = todos.find((todo: Todo) => todo.id === activeTodoId);
+
+  if (!activeTodo?.tabs) return;
+
+  const tabExists = activeTodo.tabs.some(
+    (t: Tab) =>
+      t.id === tab.id ||
+      t.currentUrl === tab.url ||
+      t.title === tab.title ||
+      t.title === tab.url
+  );
+
+  if (tabExists) return;
+
   const newTab: Tab = {
     id: tab.id,
     currentUrl: tab.url,
@@ -61,18 +70,24 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     return;
 
   const { todos = [] } = await chrome.storage.local.get(["todos"]);
-  const activeTodo = todos.find((todo: Todo) => todo.id === activeTodoId);
+  const activeTodo: Todo = todos.find((todo: Todo) => todo.id === activeTodoId);
 
   if (!activeTodo?.tabs) return;
 
-  // Check if we already have this tab
-  const existingTab = activeTodo.tabs.find((t: Tab) => t.id === tabId);
+  // Check if we already have this tab, checks all names and urls, but need to make sure this is okay for the future.
+  const existingTab = activeTodo.tabs.find(
+    (t: Tab) =>
+      t.id === tab.id ||
+      t.currentUrl === tab.url ||
+      t.title === tab.title ||
+      t.title === tab.url
+  );
 
   const updatedTodos = todos.map((todo: Todo) => {
     if (todo.id === activeTodoId) {
       let updatedTabs;
 
-      if (existingTab) {
+      if (existingTab && existingTab.currentUrl !== tab.url) {
         // Update existing tab
         updatedTabs = todo.tabs?.map((t) => {
           if (t.id === tabId) {
@@ -104,4 +119,36 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   });
 
   await chrome.storage.local.set({ todos: updatedTodos });
+});
+
+// Listen for window close events
+chrome.windows.onRemoved.addListener(async (windowId) => {
+  const { todos = [] } = await chrome.storage.local.get(["todos"]);
+
+  const updatedTodos = todos.map((todo: Todo) =>
+    todo.windowId === windowId ? { ...todo, windowId: undefined } : todo
+  );
+
+  await chrome.storage.local.set({ todos: updatedTodos });
+});
+
+// Listen for window focus changes, and switch todos if the window switches.
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+
+  const { todos = [] } = await chrome.storage.local.get(["todos"]);
+  const todoWithWindow = todos.find((todo: Todo) => todo.windowId === windowId);
+
+  if (todoWithWindow) {
+    // Update active status in memory
+    activeTodoId = todoWithWindow.id;
+
+    // Update active status in storage
+    const updatedTodos = todos.map((todo: Todo) => ({
+      ...todo,
+      active: todo.id === todoWithWindow.id,
+    }));
+
+    await chrome.storage.local.set({ todos: updatedTodos });
+  }
 });
